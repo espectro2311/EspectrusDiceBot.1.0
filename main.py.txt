@@ -1,0 +1,115 @@
+import discord
+import re
+import random
+import os
+
+TOKEN = os.getenv("TOKEN")
+
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+# Emojis personalizados
+EMOJI_ATAQUE = "⚔️"
+EMOJI_DANO = "💥"
+EMOJI_TOTAL = "📊"
+EMOJI_DADOS = "🎲"
+
+def rolar_dados(qtd, faces):
+    """Rola 'qtd' dados com 'faces' faces."""
+    return [random.randint(1, faces) for _ in range(qtd)]
+
+@client.event
+async def on_ready():
+    """Confirma que o bot está online."""
+    print(f"Bot {client.user} conectado com sucesso!")
+
+@client.event
+async def on_message(message):
+    """Processa as mensagens para rolar dados."""
+    if message.author.bot:
+        return
+
+    texto = message.content.strip()
+    
+    # --- Processamento do Comando de Ataque (d100) ---
+    ataque_linha = None
+    texto_processado = texto
+    
+    ataque_match = re.search(r'\b(\d+)d100(\s*[+-]\s*\d+)?\s*(ataque)?\b', texto, re.IGNORECASE)
+
+    if ataque_match:
+        qtd = int(ataque_match.group(1))
+        mod_str = ataque_match.group(2)
+        ataque_mod = int(mod_str.replace(" ", "")) if mod_str else 0
+        rolls = rolar_dados(qtd, 100)
+        total = sum(rolls) + ataque_mod
+        
+        ataque_linha = (
+            f"{EMOJI_ATAQUE} **Ataque:**\n"
+            f"{qtd}d100 = {rolls} {mod_str} → {total}"
+        )
+        if ataque_match.group(3):
+            ataque_linha += " → ataque"
+        
+        texto_processado = texto.replace(ataque_match.group(0), '', 1).strip()
+    
+    # --- Processamento dos Blocos de Dano ---
+    # Encontra todos os blocos de dano
+    blocos_dano = re.findall(r'(?P<dado>\d+d\d+)(?P<mods>.*?)(?=\d+d\d+|$)', texto_processado, re.IGNORECASE)
+
+    linhas_dano = []
+    total_dano_final = 0
+    
+    for dado_str, mods_str in blocos_dano:
+        dado_match = re.search(r'([+-]?\d+)d(\d+)', dado_str)
+        if not dado_match:
+            continue
+            
+        qtd = int(dado_match.group(1))
+        faces = int(dado_match.group(2))
+        rolls = rolar_dados(abs(qtd), faces)
+        
+        subtotal_dados = sum(rolls)
+        if qtd < 0:
+            subtotal_dados = -subtotal_dados
+        
+        subtotal_final_bloco = subtotal_dados
+        calc_parts = [f"{dado_str} = {rolls} → {subtotal_dados}"]
+        
+        # Expressão regular para encontrar todos os modificadores, porcentagens e descrições
+        modificadores_encontrados = re.findall(r'([+-]?\d+%|[+-]\d+|\b[a-zA-ZÀ-ÿ]+\b)', mods_str)
+        
+        for mod in modificadores_encontrados:
+            if '%' in mod: # Se for porcentagem
+                pct_val = int(mod.replace('%', ''))
+                subtotal_final_bloco = int(subtotal_final_bloco * (1 + pct_val / 100))
+                calc_parts.append(f"{mod} → {subtotal_final_bloco}")
+            elif re.match(r'^[+-]?\d+$', mod): # Se for modificador fixo
+                val = int(mod)
+                subtotal_final_bloco += val
+                calc_parts.append(f"{mod} → {subtotal_final_bloco}")
+            else: # Se for descrição
+                calc_parts.append(f" → {mod}")
+        
+        linhas_dano.append(" ".join(calc_parts))
+        total_dano_final += subtotal_final_bloco
+
+    # --- Monta a resposta final ---
+    resposta = []
+    if ataque_linha:
+        resposta.append(ataque_linha)
+    
+    if linhas_dano:
+        if ataque_linha:
+             resposta.append("")
+        resposta.append(f"{EMOJI_DANO} **Dano:**")
+        resposta.extend([f"{EMOJI_DADOS} {linha}" for linha in linhas_dano])
+    
+    if total_dano_final > 0:
+        resposta.append(f"{EMOJI_TOTAL} Total de Dano: {total_dano_final}")
+
+    if resposta:
+        await message.channel.send("\n".join(resposta))
+
+client.run(TOKEN)
